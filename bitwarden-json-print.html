@@ -1,0 +1,430 @@
+<!doctype html>
+<!--
+  bitwarden-json-print - turns a Bitwarden JSON export into a dense, printable table
+  https://github.com/RefNull/bitwarden-json-print
+  MIT licensed. Single file, no dependencies, no network access. Chrome recommended.
+  Not affiliated with or endorsed by Bitwarden, Inc.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bitwarden JSON Print</title>
+<meta name="description" content="Turn a Bitwarden JSON export into a dense, printable paper backup.">
+<style id="pagecss">@page { size: 210mm 297mm; margin: 0; }</style>
+<style>
+  :root { --fs: 6.4pt; --mt: 10mm; --ml: 8mm; --pw: 210mm; --ph: 297mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #e9e9e9; }
+  body { font: var(--fs)/1.1 "Helvetica Neue", Arial, sans-serif; color: #000;
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* ---------- settings bar (screen only) ---------- */
+  .ui { font: 13px/1.5 "Helvetica Neue", Arial, sans-serif; background: #fff; border-bottom: 1px solid #ccc;
+        padding: 12px 18px 14px; position: sticky; top: 0; z-index: 9; }
+  .ui h2 { margin: 0 0 8px; font-size: 15px; }
+  .row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; padding: 4px 0;
+         border-top: 1px solid #eee; }
+  .lbl { flex: 0 0 72px; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .ui label { white-space: nowrap; }
+  .ui input[type=text], .ui input[type=date], .ui input[type=number], .ui select {
+        font: 13px "Helvetica Neue", Arial, sans-serif; padding: 2px 4px; border: 1px solid #bbb; border-radius: 3px; }
+  .ui input[type=text] { width: 175px; }
+  .ui input[type=number] { width: 54px; }
+  .ui input:disabled + span, .ui label.off { color: #aaa; }
+  .drop { border: 2px dashed #bbb; border-radius: 5px; padding: 12px; text-align: center; color: #666;
+          margin-bottom: 8px; cursor: pointer; background: #fafafa; }
+  .drop.over { border-color: #333; background: #eee; color: #000; }
+  .ui button { font: 13px "Helvetica Neue", Arial, sans-serif; padding: 4px 12px; }
+  .hint { color: #666; font-size: 12px; margin-top: 8px; }
+  .err { color: #b00; font-weight: 600; }
+  .warn { background: #fff6d6; border: 1px solid #e0c86a; padding: 5px 8px; border-radius: 3px;
+          display: inline-block; margin-top: 6px; font-size: 12px; }
+  .hide { display: none; }
+
+  /* ---------- sheets ---------- */
+  #sheets { padding: 14px 0 30px; }
+  .sheet { width: var(--pw); height: var(--ph); padding: var(--mt) var(--ml); background: #fff;
+           margin: 0 auto 10mm; overflow: hidden; display: flex; flex-direction: column;
+           box-shadow: 0 1px 5px rgba(0, 0, 0, .35); page-break-after: always; break-after: page; }
+  .sheet:last-child { page-break-after: auto; break-after: auto; }
+  .body { flex: 1 1 auto; overflow: hidden; }
+  .body.two { display: flex; }
+  .col { overflow: hidden; }
+  .foot { flex: 0 0 auto; height: 3.4mm; padding-top: 0.9mm; border-top: 0.3pt solid #bbb;
+          font-size: 5pt; color: #666; display: flex; justify-content: space-between; }
+  .cover { align-items: center; justify-content: center; text-align: center; display: flex; }
+  .cover h1 { font-size: 16pt; font-weight: 600; margin: 0 0 6mm; line-height: 1.35; }
+  .cover p { font-size: 8pt; color: #444; margin: 0; }
+  #measure { position: absolute; left: -9999px; top: 0; height: auto; visibility: hidden;
+             box-shadow: none; margin: 0; }
+
+  /* ---------- table ---------- */
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th { font-size: calc(var(--fs) + 0.2pt); text-align: left; border-bottom: 0.6pt solid #000; padding: 0 2px 1px; }
+  td { padding: 0.4pt 2px; border-bottom: 0.3pt solid #ccc; vertical-align: top;
+       overflow-wrap: break-word; word-break: break-word; }
+  .m { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: calc(var(--fs) - 0.2pt); }
+  .d { color: #0033cc; }   /* digits: tells 0 from O, 1 from I/l at 6pt */
+  .t { color: #777; font-size: calc(var(--fs) - 1pt); }
+  .f td { background: #e8e8e8; font-weight: 700; font-size: calc(var(--fs) + 0.2pt);
+          padding: 1pt 2px; border-bottom: 0.6pt solid #000; }
+  b { font-weight: 600; }
+
+  @media print {
+    html, body { background: #fff; }
+    .ui { display: none; }
+    #sheets { padding: 0; }
+    .sheet { margin: 0; box-shadow: none; }
+    #measure { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="ui">
+  <h2>Bitwarden JSON Print <span style="font-weight:400;color:#888;font-size:13px">
+      &mdash; a dense, printable paper backup of your vault export</span></h2>
+  <div class="drop" id="drop">Drop your unencrypted Bitwarden <b>.json</b> export here &mdash; or click to pick a file</div>
+  <input type="file" id="file" accept=".json,application/json" hidden>
+
+  <div class="row"><span class="lbl">Document</span>
+    <label>Export name <input type="text" id="name" placeholder="e.g. Vault export"></label>
+    <label>As of <input type="date" id="date"></label>
+    <label><input type="checkbox" id="foot" checked> <span>page footer</span></label>
+  </div>
+
+  <div class="row"><span class="lbl">Page</span>
+    <label>Size
+      <select id="size">
+        <option value="210x297" selected>A4 (210 &times; 297)</option>
+        <option value="148x210">A5 (148 &times; 210)</option>
+        <option value="297x420">A3 (297 &times; 420)</option>
+        <option value="216x279">Letter (216 &times; 279)</option>
+        <option value="216x356">Legal (216 &times; 356)</option>
+        <option value="custom">Custom&hellip;</option>
+      </select></label>
+    <span id="customwrap" class="hide">
+      <label>W <input type="number" id="cw" value="210" min="50" max="900" step="1"></label>
+      <label>H <input type="number" id="ch" value="297" min="50" max="900" step="1"></label> mm
+    </span>
+    <label>Orientation
+      <select id="orient"><option value="p">portrait</option><option value="l">landscape</option></select></label>
+    <span id="twowrap" class="hide"><label><input type="checkbox" id="twocol"> <span>two columns</span></label></span>
+    <label>Margin top/bottom <input type="number" id="mt" value="10" step="1" min="0" max="40"></label>
+    <label>left/right <input type="number" id="ml" value="8" step="1" min="0" max="40"></label> mm
+  </div>
+
+  <div class="row"><span class="lbl">Density</span>
+    <label>Font pt <input type="number" id="font" value="6.4" step="0.2" min="4" max="14"></label>
+    <label><input type="checkbox" id="group" checked> <span>group by folder</span></label>
+    <label><input type="checkbox" id="hosturi" checked> <span>URI: host only</span></label>
+    <label><input type="checkbox" id="totp" checked> <span>include TOTP secrets</span></label>
+  </div>
+
+  <div class="row"><span class="lbl">Blue digits</span>
+    <label><input type="checkbox" id="blue1" checked> <span>username &amp; password</span></label>
+    <label><input type="checkbox" id="blue2" checked> <span>other fields / notes</span></label>
+  </div>
+
+  <div class="row"><span class="lbl">Columns</span>
+    <span id="cols" style="color:#888">load a file to see which columns it has</span>
+  </div>
+
+  <div class="hint" id="hint">Everything happens in this page &mdash; the file is never uploaded anywhere.</div>
+  <div class="warn">Chrome recommended. In the print dialog: paper matching the size above, margins
+    <b>None</b> (margins are baked into each page), headers &amp; footers <b>off</b>,
+    background graphics <b>on</b>, scale <b>100%</b>.
+    <button id="print" disabled>Print / Save as PDF</button></div>
+</div>
+
+<div id="sheets"></div>
+<div id="measure" class="sheet"></div>
+
+<script>
+const TYPE = {1: "", 2: "note", 3: "card", 4: "id"};
+const FOOT_MM = 3.4;                 // footer strip height, must match .foot in CSS
+const GUTTER_MM = 6;                 // space between the two columns in landscape
+const IDENT = ["title", "firstName", "middleName", "lastName", "username", "company", "ssn",
+               "passportNumber", "licenseNumber", "email", "phone", "address1", "address2",
+               "address3", "city", "state", "postalCode", "country"];
+
+// column id, header, relative width, monospace
+const COLS = [
+  {id: "name",     head: "Name",                w: 16, mono: false},
+  {id: "username", head: "Username",            w: 16, mono: true},
+  {id: "password", head: "Password",            w: 15, mono: true},
+  {id: "uri",      head: "URI",                 w: 15, mono: false},
+  {id: "extra",    head: "Other fields / notes", w: 38, mono: false}
+];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const clean = s => (s === null || s === undefined) ? "" : String(s).replace(/\s+/g, " ").trim();
+const num = (id, d) => { const v = parseFloat($(id).value); return isFinite(v) ? v : d; };
+const on = id => $(id).checked;
+const digits = s => s.replace(/[0-9]+/g, m => '<span class="d">' + m + "</span>");
+
+function pxPerMm() {
+  const p = document.createElement("div");
+  p.style.cssText = "position:absolute;left:-9999px;height:100mm";
+  document.body.appendChild(p);
+  const r = p.getBoundingClientRect().height / 100;
+  p.remove();
+  return r;
+}
+
+function pageMm() {
+  let w, h;
+  if ($("size").value === "custom") { w = num("cw", 210); h = num("ch", 297); }
+  else { const p = $("size").value.split("x"); w = +p[0]; h = +p[1]; }
+  return $("orient").value === "l" ? {w: h, h: w} : {w: w, h: h};
+}
+
+function shortUri(u) {
+  u = clean(u).replace(/^(https?|androidapp|iosapp):\/\//, "").replace(/^www\./, "");
+  return on("hosturi") ? u.split(/[/?#]/)[0] : u.replace(/\/+$/, "");
+}
+
+// everything that is not name/username/password/uri, as compact key/value pairs
+function extras(it) {
+  const out = [], push = (k, v) => { v = clean(v); if (v) out.push([k, v]); };
+  if (on("totp")) push("totp", (it.login || {}).totp);
+  const c = it.card || {};
+  if (c && Object.keys(c).length) {
+    push("brand", c.brand); push("name", c.cardholderName); push("no", c.number);
+    push("exp", [clean(c.expMonth), clean(c.expYear)].filter(Boolean).join("/")); push("cvv", c.code);
+  }
+  const id = it.identity || {};
+  if (id) for (const k of IDENT) push(k, id[k]);
+  for (const f of (it.fields || [])) push(clean(f.name) || "field", f.value);
+  push("notes", it.notes);
+  return out;
+}
+
+function cell(it, id) {
+  const lg = it.login || {};
+  if (id === "name") {
+    const t = TYPE[it.type] || "";
+    return esc(clean(it.name)) + (t ? ' <span class="t">' + t + "</span>" : "");
+  }
+  if (id === "username") { const v = esc(clean(lg.username)); return on("blue1") ? digits(v) : v; }
+  if (id === "password") { const v = esc(clean(lg.password)); return on("blue1") ? digits(v) : v; }
+  if (id === "uri") return esc((lg.uris || []).slice(0, 2).map(u => shortUri(u.uri)).filter(Boolean).join(" "));
+  return extras(it).map(kv => {
+    const v = esc(kv[1]);
+    return "<b>" + esc(kv[0]) + ":</b> " + (on("blue2") ? digits(v) : v);
+  }).join(" &middot; ");
+}
+
+// which columns actually carry data in this export
+function census(items) {
+  const n = {};
+  COLS.forEach(c => { n[c.id] = 0; });
+  items.forEach(it => COLS.forEach(c => { if (cell(it, c.id).replace(/<[^>]*>/g, "").trim()) n[c.id]++; }));
+  return n;
+}
+
+let colOn = {};   // user's column choices, kept across redraws
+
+function buildColUi(counts) {
+  const box = $("cols");
+  box.innerHTML = "";
+  box.style.color = "";
+  COLS.forEach(c => {
+    const has = counts[c.id] > 0;
+    if (!(c.id in colOn)) colOn[c.id] = has;
+    if (!has) colOn[c.id] = false;
+    const l = document.createElement("label");
+    if (!has) l.className = "off";
+    l.innerHTML = '<input type="checkbox"' + (colOn[c.id] ? " checked" : "") + (has ? "" : " disabled") +
+                  '> <span>' + c.head + " (" + counts[c.id] + ")</span>";
+    l.querySelector("input").onchange = e => { colOn[c.id] = e.target.checked; redraw(); };
+    box.appendChild(l);
+  });
+}
+
+function visibleCols() {
+  const v = COLS.filter(c => colOn[c.id]);
+  return v.length ? v : [COLS[0]];
+}
+
+function tableHtml(rows) {
+  const v = visibleCols();
+  const tot = v.reduce((a, c) => a + c.w, 0);
+  return "<table><colgroup>" +
+    v.map(c => '<col style="width:' + (100 * c.w / tot).toFixed(2) + '%">').join("") +
+    "</colgroup><thead><tr>" + v.map(c => "<th>" + c.head + "</th>").join("") +
+    "</tr></thead><tbody>" + rows + "</tbody></table>";
+}
+
+function rowsHtml(items, data) {
+  const fn = {};
+  (data.folders || []).forEach(f => { fn[f.id] = f.name || "(no folder)"; });
+  const grouped = on("group");
+  const fold = it => fn[it.folderId] || "(no folder)";
+  const key = it => ((grouped ? fold(it) + " " : "") + clean(it.name)).toLowerCase();
+
+  items.sort((a, b) => key(a).localeCompare(key(b)));
+
+  const v = visibleCols();
+  let html = "", cur = null;
+  for (const it of items) {
+    if (grouped && fold(it) !== cur) {
+      cur = fold(it);
+      html += '<tr class="f"><td colspan="' + v.length + '">' + esc(cur) + "</td></tr>";
+    }
+    html += "<tr>" + v.map(c => '<td' + (c.mono ? ' class="m"' : "") + ">" + cell(it, c.id) + "</td>").join("") + "</tr>";
+  }
+  return html;
+}
+
+function sheetEl(cls) {
+  const s = document.createElement("div");
+  s.className = "sheet" + (cls ? " " + cls : "");
+  return s;
+}
+
+function render(data, name, date) {
+  const out = $("sheets");
+  const items = (data.items || []).filter(i => !i.deletedDate);
+  out.innerHTML = "";
+  if (!items.length) { $("print").disabled = true; $("hint").textContent = "No items in this export."; return; }
+
+  buildColUi(census(items));            // settle which columns exist before laying anything out
+  const rows = rowsHtml(items, data);
+
+  const pg = pageMm();
+  const wantFoot = on("foot");
+  const stamp = "Bitwarden extract of " + name + " - as of " + date;
+
+  // landscape can run two independent columns of the table per sheet
+  const ncol = ($("orient").value === "l" && on("twocol")) ? 2 : 1;
+  const colW = (pg.w - 2 * num("ml", 8) - (ncol - 1) * GUTTER_MM) / ncol;
+  const colStyle = 'style="width:' + colW.toFixed(2) + 'mm"';
+
+  // 1. measure: one layout pass over the whole table, at the width a column will really have
+  const meas = $("measure");
+  meas.innerHTML = '<div class="body"><div class="col" ' + colStyle + ">" + tableHtml(rows) + "</div></div>";
+  const table = meas.querySelector("table");
+  const headH = table.tHead.getBoundingClientRect().height;
+  const trs = Array.prototype.slice.call(table.tBodies[0].rows);
+  const hs = trs.map(tr => tr.getBoundingClientRect().height);
+
+  const perMm = pxPerMm();
+  const avail = (pg.h - 2 * num("mt", 10) - (wantFoot ? FOOT_MM : 0)) * perMm - headH - 1;
+
+  // 2. pack rows into columns; a folder heading drags its first item along
+  const cols = [[]];
+  let used = 0;
+  for (let i = 0; i < trs.length; i++) {
+    const need = hs[i] + (trs[i].classList.contains("f") ? (hs[i + 1] || 0) : 0);
+    if (used > 0 && used + need > avail) { cols.push([]); used = 0; }
+    cols[cols.length - 1].push(trs[i]);
+    used += hs[i];
+  }
+
+  // 3. deal the columns onto sheets, ncol per sheet
+  const pages = [];
+  for (let i = 0; i < cols.length; i += ncol) pages.push(cols.slice(i, i + ncol));
+  const total = pages.length + 1;
+  const cover = sheetEl("cover");
+  cover.innerHTML = "<div><h1>Bitwarden extract of " + esc(name) + "<br>as of " + esc(date) + "</h1>" +
+                    "<p>" + items.length + " items &mdash; confidential</p></div>";
+  out.appendChild(cover);
+
+  pages.forEach((page, i) => {
+    const s = sheetEl();
+    const body = document.createElement("div");
+    body.className = "body" + (ncol > 1 ? " two" : "");
+    page.forEach((colRows, j) => {
+      const col = document.createElement("div");
+      col.className = "col";
+      col.style.width = colW.toFixed(2) + "mm";
+      if (j) col.style.marginLeft = GUTTER_MM + "mm";
+      col.innerHTML = tableHtml("");
+      const tb = col.querySelector("tbody");
+      colRows.forEach(tr => tb.appendChild(tr));   // moves the measured rows in as-is
+      body.appendChild(col);
+    });
+    s.appendChild(body);
+    if (wantFoot) {
+      const f = document.createElement("div");
+      f.className = "foot";
+      f.innerHTML = "<span>" + esc(stamp) + "</span><span>page " + (i + 2) + " of " + total + "</span>";
+      s.appendChild(f);
+    }
+    out.appendChild(s);
+  });
+
+  meas.innerHTML = "";
+  document.title = "Bitwarden extract of " + name + " as of " + date;
+  $("print").disabled = false;
+  $("hint").innerHTML = "<b>" + items.length + "</b> items on <b>" + total + "</b> pages (1 cover + " +
+    pages.length + ") at " + pg.w + " &times; " + pg.h + " mm" + (ncol > 1 ? ", two columns" : "") +
+    ". Drop the font size to squeeze out a page.";
+}
+
+let raw = null, srcName = "";
+
+function applyVars() {
+  const pg = pageMm();
+  const st = document.documentElement.style;
+  st.setProperty("--pw", pg.w + "mm");
+  st.setProperty("--ph", pg.h + "mm");
+  st.setProperty("--fs", num("font", 6.4) + "pt");
+  st.setProperty("--mt", num("mt", 10) + "mm");
+  st.setProperty("--ml", num("ml", 8) + "mm");
+  $("pagecss").textContent = "@page { size: " + pg.w + "mm " + pg.h + "mm; margin: 0; }";
+  $("customwrap").className = $("size").value === "custom" ? "" : "hide";
+  $("twowrap").className = $("orient").value === "l" ? "" : "hide";
+}
+
+function draw() {
+  applyVars();
+  if (!raw) return;
+  render(raw, $("name").value || srcName, $("date").value || new Date().toISOString().slice(0, 10));
+}
+
+let timer = null;
+function redraw() { clearTimeout(timer); timer = setTimeout(draw, 150); }
+
+function load(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    let d;
+    try { d = JSON.parse(rd.result); }
+    catch (e) { $("hint").innerHTML = '<span class="err">Not valid JSON: ' + esc(e.message) + "</span>"; return; }
+    if (d.encrypted) {
+      $("hint").innerHTML = '<span class="err">This export is encrypted &mdash; re-export as unencrypted JSON.</span>';
+      return;
+    }
+    raw = d;
+    colOn = {};                                   // new file, re-derive the columns
+    srcName = file.name.replace(/\.json$/i, "");
+    if (!$("name").value) $("name").value = srcName;
+    draw();
+  };
+  rd.readAsText(file);
+}
+
+$("date").value = new Date().toISOString().slice(0, 10);
+$("drop").onclick = () => $("file").click();
+$("file").onchange = e => { if (e.target.files[0]) load(e.target.files[0]); };
+["dragenter", "dragover"].forEach(ev => $("drop").addEventListener(ev, e => {
+  e.preventDefault(); $("drop").classList.add("over");
+}));
+["dragleave", "drop"].forEach(ev => $("drop").addEventListener(ev, e => {
+  e.preventDefault(); $("drop").classList.remove("over");
+}));
+$("drop").addEventListener("drop", e => { if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+["name", "date", "size", "orient", "twocol", "cw", "ch", "mt", "ml", "font", "group", "hosturi",
+ "totp", "blue1", "blue2", "foot"].forEach(id => {
+  const el = $(id);
+  el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", redraw);
+});
+$("print").onclick = () => window.print();
+applyVars();
+</script>
+
+</body>
+</html>
